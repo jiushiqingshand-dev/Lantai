@@ -17,6 +17,7 @@
 #      _configure_stdio_utf8 的说明），不该发生在别人 import 的时候。
 # 判据：tests/test_mcp_import_side_effects.py（子进程取证 + lantai/** 模块级写 AST 锁）。
 
+import contextlib
 import hashlib
 import json
 import math
@@ -4187,14 +4188,29 @@ def _configure_stdio_utf8() -> None:
     Windows 默认用 GBK 读写 stdin/stdout；Hermes 按 UTF-8 传 JSON（含中文 query），
     若按 GBK 读则中文全变乱码（如「你好」→「浣犲ソ」）→ 检索零命中、注入全失效。
     必须在任何 stdin/stdout 读写前执行，但**只在该进程真被当 stdio 服务拉起时**执行；
-    写在模块顶部会波及一切 importer 的进程标准流（票 05 续15）。Python 3.7+ reconfigure；
-    旧版靠 PYTHONIOENCODING 兜底。
+    写在模块顶部会波及一切 importer 的进程标准流（票 05 续15）。Python 3.7+ reconfigure。
+
+    stderr 同钉（票 30 A5）：logger 的 StreamHandler 绑 sys.stderr，异常 repr 嵌
+    GBK 外字符时 logger.exception 产 "--- Logging error ---" 噪声丢行。
+    三股流各自独立处理：stdin 失败静默（contextlib.suppress——被嵌入/被捕获语境下
+    sys.stdin 是 DontReadFromInput 类桩，没有 reconfigure——stdio 服务真 stdin 恒为
+    TextIOWrapper，三真实入口已核实）；stdout/stderr 承载协议帧与日志，
+    失败必须 fail-loud（票 30 A5）：旧版此处 os.environ.setdefault(
+    "PYTHONIOENCODING") 是死代码——该变量只在解释器启动建流时被读，运行期
+    setdefault 对已建流的编码毫无作用，静默带着 GBK 继续跑恰是本函数要防的病。
     """
-    try:
+    for stream, errors in ((sys.stdout, "strict"), (sys.stderr, "replace")):
+        try:
+            stream.reconfigure(encoding="utf-8", errors=errors)
+        except (AttributeError, ValueError):
+            warnings.warn(
+                f"{stream.__class__.__name__} reconfigure failed; stream stays "
+                "locale-encoded (PYTHONIOENCODING set at runtime has no effect "
+                "on already-created streams)",
+                stacklevel=2,
+            )
+    with contextlib.suppress(AttributeError, ValueError):
         sys.stdin.reconfigure(encoding="utf-8")
-        sys.stdout.reconfigure(encoding="utf-8")
-    except (AttributeError, ValueError):
-        os.environ.setdefault("PYTHONIOENCODING", "utf-8")
 
 
 def _emit_error_frame(mid, type_name: str) -> None:
