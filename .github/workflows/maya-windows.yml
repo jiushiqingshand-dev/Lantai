@@ -1,0 +1,59 @@
+name: Maya Windows check (fork only)
+
+# 只放在小号 fork 的 maya-ci/* 分支上，不往 JIUSHIQINGSHAN/Lantai 提。
+# 目的：用户在 Windows 上跑兰台，巡检在 windows-latest 上跑注入链路相关测试
+# （插件、shell_hook、host_protocol、超时/子进程/编码）和全量 pytest。
+# 提交者：Maya（Sesame 的 AI 助手），代用户经小号 jiushiqingshand-dev 提交
+
+on:
+  push:
+    branches: ['maya-ci/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.14'
+      - name: Install
+        run: pip install -e .[dev]
+      - name: Environment
+        shell: pwsh
+        run: |
+          python -c "import sys,locale; print(sys.version); print('preferred', locale.getpreferredencoding(False)); print('fs', sys.getfilesystemencoding())"
+      - name: Hook / plugin / host protocol tests
+        env:
+          API_KEY: test-key
+        run: >-
+          pytest -q -rfE -p no:cacheprovider
+          tests/test_hermes_plugin.py tests/test_shell_hook.py tests/test_host_protocol.py
+          tests/test_hook_api_key_gate.py tests/test_hook_named_tools_in_default_profile.py
+          tests/test_hook_stdout_protocol.py tests/test_hook_timeout_budget.py
+          tests/test_hook_timeout_orphan_event.py tests/test_install_host_hooks.py
+          tests/test_plugin_channel_timeout.py tests/test_plugin_nonprimary_readonly.py
+          tests/test_plugin_read_timeout.py tests/test_plugin_receipt_defer.py
+          tests/test_plugin_short_query_persona.py tests/test_plugin_veto_no_write.py
+          tests/test_plugin_wall_margin.py tests/test_plugin_zero_hit_eventid_passthrough.py
+          tests/test_fence.py tests/test_gate_subprocess_encoding.py tests/test_gate_probe_encoding.py
+          tests/test_inject_frame_time.py tests/test_inject_frame_tz.py tests/test_work_items_read_ownership.py tests/test_monitor.py tests/test_monitor_ownership.py
+          --junitxml=hook-results.xml
+      - name: Full test suite (informational)
+        if: always()
+        continue-on-error: true
+        env:
+          API_KEY: test-key
+        run: pytest tests/ -q -rfE -p no:cacheprovider --junitxml=full-results.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-junit
+          path: '*-results.xml'
